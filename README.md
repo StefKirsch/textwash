@@ -1,6 +1,28 @@
 # Textwash
 
-**UPDATE: Textwash is now available for Dutch! See below for details of how you can run the Dutch anonymization model.**
+**Notice of transition to Textwash Pro**
+
+The Textwash project evolves: to meet the growing demand for high-performance PII redaction tools, we have transitioned our core development to Textwash Pro. That shift allows us to implement significant advancements in model architecture, training data, and processing speed.  
+
+Important: _The current repository containing the base version of Textwash **remains free and open-source**. We are committed to maintaining it with lightweight updates and PRs._
+
+If your projects require advanced automated text anonymization with high precision, our new [Textwash Pro](https://www.textwash.eu/) offers a sophisticated anonymization software suite designed for modern data privacy needs.
+
+We have overhauled the platform to provide an NLP anonymization tool that includes:
+
+- updated machine-learning architecture: A complete rewrite of the core engine using bespoke NER-based anonymization (Named Entity Recognition)
+- multi-language support: New models trained for probabilistic PII detection across six languages
+- Enhanced PII detection: New entities for identification and replacement to ensure GDPR-compliant anonymization
+- Performance & speed improvements: Substantially increased processing power for large-scale document anonymization software tasks
+- User-friendly interfaces: Dedicated offline text anonymizer apps (GUIs) for both Windows and Mac (+ cloud & API & mobile)
+
+Textwash Pro is built to help individual researchers, academic labs, and large-scale organizations (private/public sector) to anonymize qualitative data safely. The tool will enable you to meet requirements for text anonymization for studies, archiving sensitive documents, or cleaning datasets for safe LLM use.
+
+
+---------
+
+
+_Textwash is available for English and Dutch._
 
 Textwash is an automated text anonymisation tool written in Python. The tool can be used to anonymise unstructured text data. To achieve this, Textwash identifies and extracts personally-identifiable information (e.g., names, dates) from text and replaces the identified entities with a generic identifier (e.g., Jane Doe is replaced with PERSON_FIRSTNAME_1 PERSON_LASTNAME_1).
 
@@ -10,12 +32,15 @@ Textwash was designed to be a tool that meets the highest standards that we have
 
 - **Complete and transparent evaluation:** you can find a full empirical evaluation of this tool in the paper linked below. We put the tool to various tests and show what it can(not) do -  this includes a motivated intruder test where humans try to re-identify persons from Textwash-anonymised documents.
 - **Data never leave your system:** at no point does the Textwash tool require you to upload (text) data or use an API. The tool is entirely functional offline (you can try it by switching off your Internet connection). This feature is essential to avoid any data leakage or possible risks for your data.
-- **Open source:** the code base is open source and can be inspected, used adn modified in line with the [GNU General Public License 3 (GPL-3.0)](https://www.gnu.org/licenses/gpl-3.0.en.html). We do this because we think it is essential that you know what this tool does.
+- **Open source:** the code base is open source and can be inspected, used and modified in line with the [GNU General Public License 3 (GPL-3.0)](https://www.gnu.org/licenses/gpl-3.0.en.html). We do this because we think it is essential that you know what this tool does.
 - **Learning-based anonymisation:** since the information that can reveal personal data is complex, we are not using a dictionary-based approach (e.g., looking up keywords in a static database). Instead, the core of Textwash is a machine learning model that assigns category probabilities to phrases and anonymises them accordingly.
 
 ### Note for researchers/organisations/other users
 
-We would be glad if Textwash is helpful to you. But even if you prefer to use another tool, we strongly encourage you to ask the developers to provide you _as the bare minimum_ with (i) an evaluation of their tool that shows empirically what it can and cannot do (you can even point them to our evaluation approach and ask them to show how their tool performs on our evaluation dataset), and (ii) reasons why they require you to send your data to online services or an API (you should never do this, nor does a good software necessitate this).
+We would be glad if Textwash is helpful to you. But even if you prefer to use another tool, we strongly encourage you to ask the developers to provide you _as the bare minimum_ with 
+
+- (i) an evaluation of their tool that shows empirically what it can and cannot do (you can even point them to our [TILD evaluation approach](https://arxiv.org/abs/2103.09263) and ask them to show how their tool performs on our evaluation dataset), and 
+- (ii) reasons why they require you (without local alternative) to send your data to online services or an API
 
 If they refuse to provide this, you should be skeptical.
 
@@ -24,12 +49,10 @@ If they refuse to provide this, you should be skeptical.
 
 We have looked hard to find a tool that is as transparent, open and data-averse (as in: not unnecessarily collecting data) as ours. We did not find any.
 
-If you have a tool that meets these requirements, we would be glad to promote it and list it here.If you think your tool is better, we would love to see your evaluation results - you can use all the data we used and we'd be happy to assist with setting up the human intruder evaluation.
-
 
 ## Quick start guide
 
-Textwash is built for Python 3. To run the software, we recommend creating a virtual environment for installing `textwash` and its dependencies. The simplest way to do this is with Python’s built-in `venv` module.
+Textwash is built for Python 3.9 or newer. To run the software, we recommend creating a virtual environment for installing `textwash` and its dependencies. The simplest way to do this is with Python’s built-in `venv` module.
 
 To create and activate a virtual environment with `venv`, open a terminal in your project directory and run:
 
@@ -118,9 +141,11 @@ If you intend to use this software commercially without our consent, please be a
 
 ## Who developed Textwash?
 
-Textwash is a multi-year project that is led by Maximilian Mozes (University College London) and Bennett Kleinberg (Tilburg University and University College London).
+Textwash was a multi-year project led by Bennett Kleinberg (Tilburg University and University College London).
 
-The work is supported by a [SAGE Proof of Concept Grant](https://www.youtube.com/watch?v=T9pRRn2DrMY) and an Open Science grant from the Dutch Research Council (NWO).
+The work was supported by a [SAGE Proof of Concept Grant](https://www.youtube.com/watch?v=T9pRRn2DrMY) and an Open Science grant from the Dutch Research Council (NWO).
+
+Future developments of Textwash happen under Textwash Pro at: [https://www.textwash.eu/](https://www.textwash.eu/)
 
 ## Questions and Comments
 

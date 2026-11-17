@@ -1,4 +1,5 @@
 import re
+import string
 from copy import deepcopy
 from .utils import decode_outputs
 
@@ -9,106 +10,40 @@ class Anonymizer:
         self.classifier = classifier
 
         with open(self.config.path_to_months_file, "r") as f:
-            self.months = f.readlines()
-            self.months = [m.replace("\n", "") for m in self.months]
+            self.months = [m.strip() for m in f.readlines()]
 
         with open(self.config.path_to_written_numbers_file, "r") as f:
-            self.written_numbers = f.readlines()
-            self.written_numbers = [w.replace("\n", "") for w in self.written_numbers]
+            self.written_numbers = [w.strip() for w in f.readlines()]
 
-        self.valid_surrounding_chars = [
-            ".",
-            ",",
-            ";",
-            "!",
-            ":",
-            "\n",
-            "’",
-            "‘",
-            "'",
-            '"',
-            "?",
-            "-",
-        ]
+        # Faster membership checks
+        self._months_set = {m.lower() for m in self.months}
+        self._written_numbers_set = {w.lower() for w in self.written_numbers}
 
-    def replace_identified_entities(self, entities, anon_input_seq, entity2generic):
-        for phrase, _ in sorted(
-            entities.items(), key=lambda x: len(x[0]), reverse=True
-        ):
-            if len(phrase) > 1 or phrase.isalnum():
-                try:
-                    for char in self.valid_surrounding_chars:
-                        anon_input_seq = re.sub(
-                            "[^a-zA-Z0-9]{}[{}]".format(phrase, char),
-                            " {}{}".format(entity2generic[phrase], char),
-                            anon_input_seq,
-                        )
+        self._strip_chars = string.punctuation + "’‘“”"
 
-                    anon_input_seq = re.sub(
-                        "[^a-zA-Z0-9\n]{}[^a-zA-Z0-9\n]".format(phrase),
-                        " {} ".format(entity2generic[phrase]),
-                        anon_input_seq,
-                    )
-
-                    anon_input_seq = re.sub(
-                        "[\n]{}".format(phrase),
-                        "\n{}".format(entity2generic[phrase]),
-                        anon_input_seq,
-                    )
-
-                    anon_input_seq = re.sub(
-                        "{}".format(phrase),
-                        "{}".format(entity2generic[phrase]),
-                        anon_input_seq,
-                    )
-                except re.error:
-                    anon_input_seq = anon_input_seq.replace(
-                        "{}".format(phrase), "{}".format(entity2generic[phrase])
-                    )
-
-        return anon_input_seq
-
-    def get_identifiable_tokens(self, text_input):
-        predictions = decode_outputs(
-            self.classifier(text_input), model_type=self.config.model_type
+        self._entity_token_pat = re.compile(
+            r"^[A-Za-z0-9]+(?:[’'\-\.&/][A-Za-z0-9]+)*$"
         )
 
-        entities = {
-            p["word"]: p["entity"]
-            for p in predictions
-            if p["entity"] != "NONE" and len(p["word"]) > 1 and p["word"].isalnum()
-        }
+        # Email validation
+        self._email_pat = re.compile(
+            r"(?i)^[A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,}$"
+        )
 
-        return entities
+        # Find emails in raw text
+        self._email_find_pat = re.compile(
+            r"(?<![\w.+-])"                            # don't start in the middle of a token
+            r"([A-Z0-9._%+\-]+@[A-Z0-9.\-]+\.[A-Z]{2,})"  # the email
+            r"(?![\w%+\-])",                           # next char cannot be a token char that would extend it
+            re.IGNORECASE,
+        )
 
-    def get_entity_type_mapping(self, entities):
-        entity2generic_c = {v: 1 for _, v in entities.items()}
-        entity2generic = {}
+        # Used for scanning word-like tokens in text for months/written numbers
+        # Examples matched: "January", "twenty-five", "O'Neil"
+        self._word_token_pat = re.compile(
+            r"(?<!\w)([A-Za-z]+(?:[’'\-][A-Za-z]+)*)(?!\w)")
 
-        for phrase, entity_type in entities.items():
-            entity2generic[phrase] = "{}_{}".format(
-                entity_type, entity2generic_c[entity_type]
-            )
-
-            entity2generic_c[entity_type] += 1
-
-        return entity2generic
-
-    def replace_numerics(self, anon_input_seq):
-        # https://pythonexamples.org/python-regex-extract-find-all-the-numbers-in-string/
-        all_numeric = list(set(re.findall("[0-9]+", anon_input_seq)))
-        numeric_map = {k: "NUMERIC_{}".format(v + 1) for v, k in enumerate(all_numeric)}
-
-        for k, v in sorted(numeric_map.items(), key=lambda x: int(x[0]), reverse=True):
-            anon_input_seq = re.sub(
-                "[^NUMERIC_0-9+]{}".format(k), " {}".format(v), anon_input_seq
-            )
-
-        return anon_input_seq
-
-    def replace_pronouns(self, anon_input_seq):
-        # https://blog.hubspot.com/marketing/gender-neutral-pronouns
-        pronoun_map = {
+        self.pronoun_map = {
             "he": "PRONOUN",
             "she": "PRONOUN",
             "him": "PRONOUN",
@@ -134,113 +69,220 @@ class Anonymizer:
             "lord": "TITLE",
         }
 
-        for k, v in pronoun_map.items():
-            if anon_input_seq.startswith("{} ".format(k)):
-                anon_input_seq = anon_input_seq.replace(
-                    "{} ".format(k), "{} ".format(v), 1
-                )
+        # Precompile pronoun patterns once (case-insensitive)
+        self._pronoun_patterns = [
+            (re.compile(rf"(?<!\w){re.escape(k)}(?!\w)", re.IGNORECASE), v)
+            for k, v in self.pronoun_map.items()
+        ]
 
-            if anon_input_seq.startswith("{} ".format(k.capitalize())):
-                anon_input_seq = anon_input_seq.replace(
-                    "{} ".format(k.capitalize()), "{} ".format(v), 1
-                )
+        # Precompile numeric matcher once
+        self._num_pat = re.compile(r"(?<!\w)(\d+(?:[.,]\d+)*)(?!\w)")
 
-            for char in self.valid_surrounding_chars:
-                anon_input_seq = re.sub(
-                    "[^a-zA-Z0-9]{}[{}]".format(k, char),
-                    " {}{}".format(v, char),
-                    anon_input_seq,
-                )
-                anon_input_seq = re.sub(
-                    "[^a-zA-Z0-9]{}[{}]".format(k.capitalize(), char),
-                    " {}{}".format(v, char),
-                    anon_input_seq,
-                )
+        # Whitespace collapse within a line
+        self._ws_collapse = re.compile(r"[ \t]+")
 
-            anon_input_seq = re.sub(
-                "[^a-zA-Z0-9]{}[^a-zA-Z0-9]".format(k),
-                " {} ".format(v),
-                anon_input_seq,
-            )
-            anon_input_seq = re.sub(
-                "[^a-zA-Z0-9]{}[^a-zA-Z0-9]".format(k.capitalize()),
-                " {} ".format(v),
-                anon_input_seq,
-            )
+        # Cache compiled entity/month/number regexes for replacements
+        self._entity_pat_cache: dict[str, re.Pattern] = {}
+        self._entity_pat_cache_ic: dict[str, re.Pattern] = {}
+
+    def _normalize_whitespace_preserve_newlines(self, text: str) -> str:
+        lines = text.splitlines(keepends=True)
+        out: list[str] = []
+
+        for line in lines:
+            if line.endswith("\r\n"):
+                content, nl = line[:-2], "\r\n"
+            elif line.endswith("\n"):
+                content, nl = line[:-1], "\n"
+            else:
+                content, nl = line, ""
+
+            m = re.match(r"^[ \t]*", content)
+            leading_ws = m.group(0) if m else ""
+            rest = content[len(leading_ws):]
+
+            rest = self._ws_collapse.sub(" ", rest)
+            cleaned = (leading_ws + rest).rstrip(" \t")
+
+            out.append(cleaned + nl)
+
+        return "".join(out)
+
+
+    def replace_emails(self, text: str) -> str:
+        email_map: dict[str, str] = {}
+        counter = 1
+
+        def repl(m: re.Match) -> str:
+            nonlocal counter
+            email = m.group(1)
+            key = email.lower()  # case-insensitive stability
+            if key not in email_map:
+                email_map[key] = f"EMAIL_ADDRESS_{counter}"
+                counter += 1
+            return email_map[key]
+
+        return self._email_find_pat.sub(repl, text)
+
+    def get_identifiable_tokens(self, text_input):
+        predictions = decode_outputs(
+            self.classifier(text_input), model_type=self.config.model_type
+        )
+
+        entities: dict[str, str] = {}
+        for p in predictions:
+            if p["entity"] == "NONE":
+                continue
+
+            raw = p["word"]
+            if not raw or len(raw) <= 1:
+                continue
+
+            cleaned = raw.strip(self._strip_chars)
+
+            if len(cleaned) <= 1:
+                continue
+
+            label = p["entity"]
+
+            # Allow emails
+            if label == "EMAIL_ADDRESS":
+                # Strip common wrapper chars too, in case text has "(a@b.com)" or "<a@b.com>"
+                email = cleaned.strip("<>()[]{}")
+                if self._email_pat.match(email):
+                    entities.setdefault(email, label)
+                continue
+
+            # Default token rule for everything else
+            if self._entity_token_pat.match(cleaned):
+                entities.setdefault(cleaned, label)
+
+        return entities
+
+
+
+    def _get_cached_boundary_pat(self, phrase: str, ignore_case: bool = False) -> re.Pattern:
+        """
+        Cached boundary-safe pattern: match phrase as a standalone token.
+        (?<!\w) and (?!\w) preserve punctuation/newlines around the match.
+        """
+        cache = self._entity_pat_cache_ic if ignore_case else self._entity_pat_cache
+        pat = cache.get(phrase)
+        if pat is None:
+            flags = re.IGNORECASE if ignore_case else 0
+            pat = re.compile(rf"(?<!\w){re.escape(phrase)}(?!\w)", flags)
+            cache[phrase] = pat
+        return pat
+
+    def replace_identified_entities(self, entities, anon_input_seq, entity2generic):
+        for phrase, _ in sorted(entities.items(), key=lambda x: len(x[0]), reverse=True):
+            if len(phrase) > 1:
+                try:
+                    repl = entity2generic[phrase]
+                    pat = self._get_cached_boundary_pat(phrase, ignore_case=True)
+                    anon_input_seq = pat.sub(repl, anon_input_seq)
+                except re.error:
+                    anon_input_seq = anon_input_seq.replace(
+                        phrase, entity2generic[phrase])
 
         return anon_input_seq
 
-    def replace_numbers_and_months(self, anon_input_seq):
-        entity2generic_c = {"DATE": 1, "NUMERIC": 1}
+    def get_entity_type_mapping(self, entities):
+        entity2generic_c = {v: 1 for _, v in entities.items()}
         entity2generic = {}
 
-        spl = re.split("[ ,.-]", anon_input_seq)
-
-        for word in spl:
-            if word.lower() in self.written_numbers:
-                try:
-                    _ = entity2generic[word]
-                except KeyError:
-                    entity2generic[word] = "{}_{}".format(
-                        "NUMERIC", entity2generic_c["NUMERIC"]
-                    )
-                    entity2generic_c["NUMERIC"] += 1
-
-        for word in spl:
-            if word.lower() in self.months:
-                try:
-                    _ = entity2generic[word]
-                except KeyError:
-                    entity2generic[word] = "{}_{}".format(
-                        "DATE", entity2generic_c["DATE"]
-                    )
-                    entity2generic_c["DATE"] += 1
-
-        for phrase, replacement in sorted(
-            entity2generic.items(), key=lambda x: len(x[0]), reverse=True
-        ):
-            for char in self.valid_surrounding_chars:
-                anon_input_seq = re.sub(
-                    "[^a-zA-Z0-9]{}[{}]".format(phrase, char),
-                    " {}{}".format(replacement, char),
-                    anon_input_seq,
-                )
-
-            anon_input_seq = re.sub(
-                "[^a-zA-Z0-9]{}[^a-zA-Z0-9]".format(phrase),
-                " {} ".format(replacement),
-                anon_input_seq,
+        for phrase, entity_type in entities.items():
+            entity2generic[phrase] = "{}_{}".format(
+                entity_type, entity2generic_c[entity_type]
             )
+            entity2generic_c[entity_type] += 1
+
+        return entity2generic
+
+    def replace_numerics(self, anon_input_seq: str) -> str:
+        """
+        Replace numeric tokens with NUMERIC_1, NUMERIC_2, ... in order of appearance.
+        Matches: 25, 3.14, 1,000, 1.000, 1,000.50, 1.000,50
+        """
+
+        numeric_map: dict[str, str] = {}
+        counter = 1
+
+        for m in self._num_pat.finditer(anon_input_seq):
+            tok = m.group(1)
+            if tok not in numeric_map:
+                numeric_map[tok] = f"NUMERIC_{counter}"
+                counter += 1
+
+        def repl(m: re.Match) -> str:
+            return numeric_map[m.group(1)]
+
+        return self._num_pat.sub(repl, anon_input_seq)
+
+    def replace_pronouns(self, anon_input_seq):
+        for pat, repl in self._pronoun_patterns:
+            anon_input_seq = pat.sub(repl, anon_input_seq)
+        return anon_input_seq
+
+    def replace_numbers_and_months(self, anon_input_seq: str) -> str:
+        """
+        (3) Improved:
+        - No splitting (which misses tokens next to punctuation you didn't include).
+        - Scan tokens via regex and replace using boundary-safe cached patterns.
+        - Deterministic numbering in order of first appearance.
+        """
+        entity2generic_c = {"DATE": 1, "NUMERIC": 1}
+        mapping: dict[str, str] = {}
+
+        # Build mapping in order of appearance
+        for m in self._word_token_pat.finditer(anon_input_seq):
+            tok = m.group(1)
+            key = tok.lower()
+
+            if key in self._written_numbers_set and tok not in mapping:
+                mapping[tok] = f"NUMERIC_{entity2generic_c['NUMERIC']}"
+                entity2generic_c["NUMERIC"] += 1
+            elif key in self._months_set and tok not in mapping:
+                mapping[tok] = f"DATE_{entity2generic_c['DATE']}"
+                entity2generic_c["DATE"] += 1
+
+        # Replace longest first to avoid partial overlaps
+        for phrase, replacement in sorted(mapping.items(), key=lambda x: len(x[0]), reverse=True):
+            pat = self._get_cached_boundary_pat(phrase, ignore_case=True)
+            anon_input_seq = pat.sub(replacement, anon_input_seq)
 
         return anon_input_seq
 
     def anonymize(self, input_seq, selected_entities=None):
-        orig_input_seq = deepcopy(input_seq)
+        # Start from the raw input
+        anon_input_seq = deepcopy(input_seq)
 
-        entities = self.get_identifiable_tokens(deepcopy(input_seq))
+        # 1) Deterministic passes first (regex)
+        anon_input_seq = self.replace_emails(anon_input_seq)
+        anon_input_seq = re.sub(r"https*://\S+", "URL", anon_input_seq)
 
-        # Filter entities if necessary
+        # 2) Run NER on the *already-masked* text
+        entities = self.get_identifiable_tokens(deepcopy(anon_input_seq))
+
+        # Filter entities if necessary (entities is a dict: {phrase: label})
         if selected_entities:
-            filtered_entities = []
-
-            for entity in entities:
-                if entity[1] in selected_entities:
-                    filtered_entities.append(entity)
-
-            entities = filtered_entities
+            entities = {
+                phrase: label
+                for phrase, label in entities.items()
+                if label in selected_entities
+            }
 
         entity2generic = self.get_entity_type_mapping(entities)
 
-        anon_input_seq = re.sub("https*://\S+", "URL", orig_input_seq)
-
+        # 3) Replace detected entities on the same anon_input_seq
         anon_input_seq = self.replace_identified_entities(
             entities, anon_input_seq, entity2generic
         )
 
+        # 4) Other passes
         anon_input_seq = self.replace_numerics(anon_input_seq)
-
         anon_input_seq = self.replace_pronouns(anon_input_seq)
-
         anon_input_seq = self.replace_numbers_and_months(anon_input_seq)
+        anon_input_seq = self._normalize_whitespace_preserve_newlines(anon_input_seq)
 
-        return " ".join([x.strip() for x in anon_input_seq.split()])
+        return anon_input_seq
